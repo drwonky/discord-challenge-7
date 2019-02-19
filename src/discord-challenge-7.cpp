@@ -14,96 +14,49 @@
 
 const int gCodeLength = 4;                            // Length of code in digits
 const int gCodeLetters = 6;                            // Variation of code eg 6 = [A..F], 8 = [A..H]
-const int gMemoryRequired = 20;                    // Bytes of memory you require - you may change this
+const int gMemoryRequired = 2;                    // Bytes of memory you require - you may change this
 unsigned char gMemory[gMemoryRequired] = { 0 };        // Array of your memory!
-unsigned char gMemory1[gMemoryRequired] = { 0 };        // Array of your memory!
-
-//template<typename It>
-//bool next_permutation(It begin, It end)
-//{
-//        if (begin == end)
-//                return false;
-//
-//        It i = begin;
-//        ++i;
-//        if (i == end)
-//                return false;
-//
-//        i = end;
-//        --i;
-//
-//        while (true)
-//        {
-//                It j = i;
-//                --i;
-//
-//                if (*i < *j)
-//                {
-//                        It k = end;
-//
-//                        while (!(*i < *--k)) /* pass */;
-//
-//                        iter_swap(i, k);
-//                        reverse(j, end);
-//                        return true;
-//                }
-//
-//                if (i == begin)
-//                {
-//                        reverse(begin, end);
-//                        return false;
-//                }
-//        }
-//}
 
 std::string codebreak(const int nCorrectDigits, const int nCorrectPositions)
 {
-	int permute[24][4] = {
-		{0,1,2,3},
-		{0,1,3,2},
-		{0,2,1,3},
-		{0,2,3,1},
-		{0,3,1,2},
-		{0,3,2,1},
-		{1,0,2,3},
-		{1,0,3,2},
-		{1,2,0,3},
-		{1,2,3,0},
-		{1,3,0,2},
-		{1,3,2,0},
-		{2,0,1,3},
-		{2,0,3,1},
-		{2,1,0,3},
-		{2,1,3,0},
-		{2,3,0,1},
-		{2,3,1,0},
-		{3,0,1,2},
-		{3,0,2,1},
-		{3,1,0,2},
-		{3,1,2,0},
-		{3,2,0,1},
-		{3,2,1,0}
-	};
-
 	struct MyData {
-		char digits[gCodeLength+1];
-		char lastchar;
-		unsigned char count;
-		int correctDigits;
+		char digits[gCodeLength];
+		unsigned char count			:4;
 	};
 
-	MyData *data = (MyData *)gMemory;
-	//std::cout<<sizeof(MyData)<<std::endl;
+	MyData data = {0};
+
+	struct PackedData {
+		unsigned short a:3;
+		unsigned short b:3;
+		unsigned short c:3;
+		unsigned short d:3;
+		unsigned short count:4;
+	};
+
+	PackedData *packed = (PackedData *)gMemory;
+
+	auto unpack = [&] {
+		data.digits[0]=packed->a+65;
+		data.digits[1]=packed->b+65;
+		data.digits[2]=packed->c+65;
+		data.digits[3]=packed->d+65;
+		data.count=packed->count;
+	};
+
+	auto pack = [&] {
+		packed->a=data.digits[0]-65;
+		packed->b=data.digits[1]-65;
+		packed->c=data.digits[2]-65;
+		packed->d=data.digits[3]-65;
+		packed->count=data.count;
+	};
+
+	unpack();	// sneaky stuff to win compo :-)
 
 	std::string guess;
 
-	auto nextpermutation = [&] (int p){
-		guess += data->digits[permute[p][0]];
-		guess += data->digits[permute[p][1]];
-		guess += data->digits[permute[p][2]];
-		guess += data->digits[permute[p][3]];
-	};
-
+	// The next 3 lambda functions are simply boilerplate std::next_permutation
 	auto swap = [] (char *a, char *b) {
 		char c;
 		c = *b;
@@ -131,131 +84,87 @@ std::string codebreak(const int nCorrectDigits, const int nCorrectPositions)
 	        i = end;
 	        --i;
 
-	        while (true)
-	        {
+	        while (true) {
 	                char *j = i;
 	                --i;
 
-	                if (*i < *j)
-	                {
+	                if (*i < *j) {
 	                        char *k = end;
 
-	                        while (!(*i < *--k)) /* pass */;
+	                        while (!(*i < *--k));
 
 	                        swap(i, k);
 	                        reverse(j, end);
 	                        return true;
 	                }
 
-	                if (i == begin)
-	                {
+	                if (i == begin) {
 	                        reverse(begin, end);
 	                        return false;
 	                }
 	        }
 	};
 
-	auto padstring = [&] (char c) {
-		guess.append(4,c);
-	};
-
-	if (data->correctDigits < gCodeLength) {
-		if (nCorrectDigits) {
-//			std::cout<<"Got a correct digit"<<std::endl;
-			for (int i=0;i<nCorrectDigits;i++) {
-				data->digits[data->correctDigits]=data->lastchar;
-				data->correctDigits++;
-//				std::cout<<"Correct digit "<<data->lastchar<<std::endl;
+	if (nCorrectDigits < gCodeLength) {
+		if (nCorrectDigits != gCodeLength) {
+			if (nCorrectDigits) {  // permuting for >0 is worth .1 better than permuting >1
+				/*
+				 * These next 2 lines form the core of the optimizations.  Each optimization is worth 1 round of guessing (total 2 less guesses per round).
+				 * First, we check if the last guess had All of the correctly guessed digits in their correct positions.
+				 * It's unlikely that the first N digits will exactly match the guessed code, so we shuffle them in the hopes
+				 * that the next guess(es) will benefit.  This nets us about 1 average permutation round per code solve.
+				 *
+				 * Checking if nCorrectDigits-1 is > nCorrectPositions nets us about .5 less guesses per round.  This is
+				 * because nCorrectDigits is based on the last round guess, which we haven't integrated into this round.
+				 *
+				 * In essence, we'd be permuting the next round data before we integrated last round's data.  We want the permutation
+				 * to lag by 1 integration, to only affect changes that were not experimental.
+				 *
+				 * Here is an example of the permute holdoff:
+				 *
+				 * 1: AAAA - ADCF Digits: 1 Positions: 1
+				 * 2: ABBB - ADCF Digits: 1 Positions: 1
+				 * 3: ACCC - ADCF Digits: 2 Positions: 2
+				 * 4: ACDD - ADCF Digits: 3 Positions: 1
+				 * 5: ADCE - ADCF Digits: 3 Positions: 3 << 3 digits in 3 positions
+				 * 6: ADCF - ADCF Digits: 4 Positions: 4 << no permute before last test
+				 * SUCCESSFULLY CRACKED CODE in 6 attempts using 5 bytes of memory
+				 * SCORE: 30
+				 *
+				 * The second optimization builds the guess based on known digits.
+				 *
+				 * Let's say the code is CADA, the guesses look like this:
+				 *
+				 * AAAA result 2
+				 * AABB result 2
+				 * AACC result 3
+				 * ACAD result 4  <-- we gained a permute here
+				 * ... until we guess CADA (9 rounds)
+				 *
+				 * Using a more naive approach, you would iterate AAAA..FFFF to guess the digits, requiring 6 rounds for
+				 * code with F in them.  By assembling guess from known digits, we get 1 free guess.
+				 *
+				 * Instead of FFFF being the 6th guess, it would be something like BAFF, which is the same as the first full guess,
+				 * so we are getting 1 full permutation for free.
+				 *
+				 */
+				if (nCorrectPositions < nCorrectDigits-1) next_permutation(data.digits, data.digits+nCorrectDigits);
 			}
+			if (data.count) for (int i=nCorrectDigits;i<gCodeLength;i++) data.digits[i]++;
 
+			guess.append(data.digits,gCodeLength);
+			data.count++;
 		}
 
-		if (data->correctDigits == gCodeLength) {
-			data->digits[gCodeLength]='\0';
-			data->count=0;
-//			std::cout << "All digits guessed: " << data->digits << std::endl;
-		} else {
-			data->lastchar = data->count+65;
-			padstring(data->lastchar);
-		}
 	}
 
-	if (data->correctDigits == gCodeLength) {
-//		nextpermutation(0,gCodeLength);
-		//nextpermutation(data->count);
-		next_permutation(data->digits, data->digits+gCodeLength);
-		guess=(char *)data->digits;
+
+	if (nCorrectDigits == gCodeLength) {
+		next_permutation(data.digits, data.digits+gCodeLength);
+		guess.append((char *)data.digits,gCodeLength);
 	}
 
-	data->count++;
- //   std::cout << "guess " << guess << std::endl;
-    std::cout << guess << " ";
-    return guess;
-}
-
-std::string codebreak1(const int nCorrectDigits, const int nCorrectPositions)
-{
-#include <algorithm>
-
-	struct MyData {
-		char digits[gCodeLength+1];
-		char lastchar;
-		char count;
-		int correctDigits;
-	};
-
-	/*
-	char g[4] = { 'A','B','C','D'};
-
-	do {
-		printf("{%d,%d,%d,%d},\n",g[0]-65,g[1]-65,g[2]-65,g[3]-65);
-	} while (std::next_permutation(g,g+4));
-	*/
-
-	MyData *data = (MyData *)gMemory1;
-	//std::cout<<sizeof(MyData)<<std::endl;
-
-	std::string guess;
-
-	auto nextpermutation = [&] {
-		guess=(char *)data->digits;
-		std::next_permutation(data->digits,data->digits+gCodeLength);
-	};
-
-	auto padstring = [&] (char c) {
-		guess.append(4,c);
-	};
-
-//	std::cout << "nCorrectDigits "<<nCorrectDigits<<" nCorrectPositions "<<nCorrectPositions<<std::endl;
-	if (data->correctDigits < gCodeLength) {
-		if (nCorrectDigits) {
-//			std::cout<<"Got a correct digit"<<std::endl;
-			for (int i=0;i<nCorrectDigits;i++) {
-				data->digits[data->correctDigits]=data->lastchar;
-				data->correctDigits++;
-//				std::cout<<"1 Correct digit "<<data->lastchar<<std::endl;
-			}
-
-		}
-
-		if (data->correctDigits == gCodeLength) {
-			data->digits[gCodeLength]='\0';
-			data->count=0;
-//			std::cout << "1 All digits guessed: " << data->digits << std::endl;
-		} else {
-			data->lastchar = data->count+65;
-			padstring(data->lastchar);
-		}
-	}
-
-	if (data->correctDigits == gCodeLength) {
-		nextpermutation();
-		guess=(char *)data->digits;
-	}
-
-	data->count++;
-//    std::cout << "1 guess " << guess << std::endl;
-    std::cout << guess << " ";
+	pack();
     return guess;
 }
 
@@ -268,20 +177,20 @@ int compo()
     int nCorrectDigits = 0;
     int nCorrectPositions = 0;
     std::string sGuess = "", sGuess1 = "";
-    int retval=0;
+//    int retval=0;
 
     for (int i=0; i<gMemoryRequired;i++) {
     	gMemory[i]=0;
-    	gMemory1[i]=0;
     }
 
     for (int i = 0; i < gCodeLength; i++)
         sCode.append(1, (rand() % gCodeLetters) + 65);
 
+//    sCode="BCBE";
     // Guess loop
     do{
         sGuess = codebreak(nCorrectDigits, nCorrectPositions);
-        sGuess1 = codebreak1(nCorrectDigits, nCorrectPositions);
+/*        sGuess1 = codebreak1(nCorrectDigits, nCorrectPositions);
         if (sGuess == sCode && sGuess1 != sCode && !retval) {
         	std::cout<<"OG won!"<<std::endl;
         	retval=1;
@@ -291,7 +200,7 @@ int compo()
         } else if (sGuess == sCode && sGuess1 == sCode && !retval) {
         	std::cout<<"TIE!!!"<<std::endl;
         	retval=3;
-        }
+        }*/
 
         nGuessCount++;
         nCorrectDigits = 0;    nCorrectPositions = 0;
@@ -318,22 +227,28 @@ int compo()
         std::cout << "SCORE: " << nGuessCount * gMemoryRequired << std::endl;
     }
 
-    return retval;
+    return nGuessCount;
 }
 
 int main()
 {
-	int who[5]={0};
+//	int who[5]={0};
+	double sumGuessCount=0;
+	int playCount=10000;
 
     srand((unsigned int)std::time(0));
 //	return compo();
 
     // Generate Code
-	for (int i=0; i<1000; i++)
-		who[compo()]++;
+	for (int i=0; i<playCount; i++)
+//		who[compo()]++;
+		sumGuessCount+=compo();
 
-	for (int i=0;i<4;i++)
-		std::cout << "who ["<<i<<"] = "<<who[i]<<std::endl;
+//	for (int i=0;i<4;i++)
+//		std::cout << "who ["<<i<<"] = "<<who[i]<<std::endl;
+
+	std::cout << "Average guesses "<<(float)sumGuessCount/playCount<<std::endl;
+	std::cout << "Score "<<(float)sumGuessCount/playCount*gMemoryRequired<<std::endl;
 
 	return 0;
 }
